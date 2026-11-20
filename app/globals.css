@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: 5.5rem;
+}
+
+body {
+  background-color: #f5f8fa;
+  color: #1f3243;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Keep the focus ring obvious everywhere, never remove it. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #087e83;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Every interactive control keeps a comfortable thumb target. */
+button,
+a[role="button"],
+select,
+input[type="checkbox"],
+input[type="radio"] {
+  touch-action: manipulation;
+}
+
+/* The schematic route line of the live preview. */
+.route-line {
+  stroke: #93c2c2;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+/* The ferry marker slides to its new place instead of jumping. */
+.ferry-marker {
+  transition: transform 700ms ease;
+}
+
+/* A thin scrollbar for the station list under the route. */
+.route-scroll {
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The map on the GPS receiver test page. */
+
+/* The station number on the route. */
+.freery-map-station {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #ffffff;
+  border-radius: 9999px;
+  background: #1f3243;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 4px rgba(31, 50, 67, 0.45);
+}
+
+/* The receiver at the front of its trace. */
+.freery-map-receiver {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #ffffff;
+  border-radius: 9999px;
+  background: #1d4ed8;
+  box-shadow: 0 0 0 6px rgba(29, 78, 216, 0.22), 0 1px 5px rgba(31, 50, 67, 0.5);
+}
+
+/*
+ * The true position the researcher marked.
+ *
+ * A crosshair, because it is a place on the ground and not a boat.
+ */
+.freery-map-reference {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 3px solid #ffffff;
+  border-radius: 9999px;
+  background:
+    linear-gradient(#c2453b, #c2453b) center / 3px 100% no-repeat,
+    linear-gradient(#c2453b, #c2453b) center / 100% 3px no-repeat,
+    rgba(194, 69, 59, 0.18);
+  box-shadow: 0 1px 6px rgba(31, 50, 67, 0.55);
+}
+
+/* Leaflet draws its own controls, so they follow the console's colours. */
+.leaflet-container {
+  font-family: inherit;
+  background: #eef1f3;
+}
+
+.leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.85);
+  color: #556274;
+  font-size: 10px;
+}
+
+.leaflet-control-attribution a {
+  color: #087e83;
+}
+
+.leaflet-bar a {
+  color: #1f3243;
+}
+
+.leaflet-control-scale-line {
+  border-color: #556274;
+  background: rgba(255, 255, 255, 0.75);
+  color: #1f3243;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

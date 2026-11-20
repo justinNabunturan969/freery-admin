@@ -1,0 +1,17 @@
+# Build output
+.next/
+out/
+.turbo/
+
+# Dependencies
+node_modules/
+
+# Secrets. These are never in the repository.
+.env
+.env.*
+!.env.example
+
+# Local tool noise
+*.tsbuildinfo
+.vercel/
+npm-debug.log*

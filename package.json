@@ -1,0 +1,40 @@
+{
+  "name": "@freery/admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Freery admin app: head station controls and the station staff passenger counter",
+  "scripts": {
+    "dev": "node scripts/run.mjs .env.local next dev --port 3001",
+    "dev:counter": "node scripts/run.mjs .env.counter.local next dev --port 3002",
+    "build": "node scripts/run.mjs .env.local next build",
+    "start": "node scripts/run.mjs .env.local next start --port 3001",
+    "start:admin": "node scripts/run.mjs .env.local next start --port 3001",
+    "start:counter": "node scripts/run.mjs .env.counter.local next start --port 3002",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vercel/functions": "^3.11.3",
+    "bcryptjs": "^3.0.2",
+    "exceljs": "^4.4.0",
+    "leaflet": "^1.9.4",
+    "next": "15.5.29",
+    "next-auth": "5.0.0-beta.32",
+    "pg": "^8.13.1",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
+    "swr": "2.5.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.16",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "cross-env": "^7.0.3",
+    "postcss": "^8.4.49",
+    "tailwindcss": "3.4.19",
+    "typescript": "^5.7.2"
+  }
+}
