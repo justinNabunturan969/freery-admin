@@ -232,6 +232,95 @@ export const counterEventSchema = z.object({  ferryId: z.number().int().positive
   stationId: z.number().int().positive().optional(),
 });
 
+/* --- The receiver's network ------------------------------------------------ */
+
+/**
+ * The name of a board that talks to the PC.
+ *
+ * The letters, numbers, dot, dash and underscore only. The name goes into a URL
+ * and into the database, and it is printed on the console.
+ */
+export const stationNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(40)
+  .regex(
+    /^[a-zA-Z0-9._-]+$/,
+    "The name may only use letters, numbers, dot, dash and underscore",
+  );
+
+/**
+ * The network a receiver is told to use.
+ *
+ * The master administrator types it into the console instead of editing the
+ * sketch and flashing the board again.
+ *
+ * The password is the station's own Wi-Fi password. It goes into the database
+ * so the board can be given it later, and it is never sent back to a browser.
+ */
+export const receiverNetworkSchema = z.object({
+  stationId: stationNameSchema,
+  ssid: z.string().trim().min(1).max(64),
+  /** An open network has no password, so this one may be empty. */
+  password: z.string().max(128),
+});
+
+/**
+ * What the receiver says about the network it is on.
+ *
+ * "connected" is a normal connection, "failed" means it tried the network it
+ * was given and could not get on it, and "setup" means the board is waiting
+ * for someone to give it a network.
+ */
+export const deviceWifiSchema = z.object({
+  ssid: z.string().max(64).optional(),
+  status: z.enum(["connected", "failed", "setup"]).optional(),
+  ip: z.string().max(45).optional(),
+});
+
+/**
+ * What the receiver sends to the server when it asks for work.
+ *
+ * The board asks every few seconds whether it has been given a new network,
+ * and says what its own network looks like at the same time. It never sends
+ * the password of the network it is on.
+ */
+export const deviceLinkSchema = z.object({
+  stationId: stationNameSchema,
+  wifi: deviceWifiSchema.optional(),
+});
+
+/**
+ * One receiver, as the console shows it.
+ *
+ * The password of the network is not here. The console never shows it again
+ * after it has been typed.
+ */
+export const receiverRowSchema = z.object({
+  stationId: z.string(),
+  wifiSsid: z.string().nullable(),
+  wifiStatus: z.enum(["connected", "failed", "setup"]).nullable(),
+  wifiIp: z.string().nullable(),
+  lastSeenAt: z.string().nullable(),
+  /** The network the receiver is being asked to use, if there is one. */
+  command: z
+    .object({
+      id: z.number().int(),
+      ssid: z.string(),
+      status: z.enum(["pending", "delivered", "connected", "failed", "cancelled"]),
+      message: z.string().nullable(),
+      createdAt: z.string(),
+      deliveredAt: z.string().nullable(),
+      answeredAt: z.string().nullable(),
+    })
+    .nullable(),
+});
+
+export const receiversResponseSchema = z.object({
+  receivers: z.array(receiverRowSchema),
+});
+
 /* --- Admin passenger manifest correction ---------------------------------- */
 
 /**

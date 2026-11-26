@@ -3,6 +3,7 @@ import NextAuth, { type NextAuthRequest } from "next-auth";
 import { authConfig } from "@/lib/auth.config";
 import {
   MODE,
+  DEVICE_PREFIXES,
   canEditFleet,
   isAdminPath,
   isCounterPath,
@@ -19,7 +20,7 @@ import {
  *   1. A route that belongs to the other mode answers "not found". It is not
  *      a redirect and it is not a login page, so the other mode has nothing
  *      to probe.
- *   2. The ingest route is public, it carries its own device key.
+ *   2. The device routes are public, they carry their own device key.
  *   3. Everything else needs a session.
  *   4. The admin process is for the head administrator and the researcher.
  *      The station process is for the staff accounts.
@@ -45,8 +46,14 @@ export default auth((request: NextAuthRequest) => {
   if (MODE === "counter" && isAdminPath(pathname)) return notFound();
   if (MODE === "admin" && isCounterPath(pathname)) return notFound();
 
-  // 2. The ingest route carries its own device key, so it has no session.
-  if (pathname.startsWith("/api/ingest")) return NextResponse.next();
+  // 2. The device routes carry their own key, so they have no session.
+  if (
+    DEVICE_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    )
+  ) {
+    return NextResponse.next();
+  }
 
   const isPublic =
     pathname === "/login" ||

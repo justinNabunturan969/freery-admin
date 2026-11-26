@@ -14,6 +14,8 @@
  *     capacity, and a retried tap is counted once
  *   - the fleet management: a ferry or a station the master administrator adds
  *     shows up on the passenger site straight away, and can be taken off again
+ *   - the receiver's network: the console gives the board a new network, the
+ *     board is given it once, and the password never comes back to a browser
  *
  * The admin process has to be running on 3001 and the station phone process
  * on 3002. It prints one line per check and exits with 1 if anything fails.
@@ -1221,9 +1223,23 @@ async function testPages(jars) {
   check("the station staff reach the station dashboard", phoneHome.status, 200);
 
   const phoneHomeHtml = (await phoneHome.text()).replace(/<!--\s*-->/g, "");
+
+  /*
+   * The station names are the real ones now, so the check reads the name from
+   * the live API instead of writing it here. The station account works at the
+   * first station on the route.
+   */
+  const liveStations = (await body(await callLive("/stations"))).stations ?? [];
+  const firstStation = liveStations.find((station) => station.id === 1);
+  const firstStationName = firstStation?.name ?? "";
+
+  truthy(
+    "the live route carries the first station",
+    firstStationName.length > 0,
+  );
   truthy(
     "the station dashboard names the station the account works at",
-    phoneHomeHtml.includes("Station 1"),
+    firstStationName.length > 0 && phoneHomeHtml.includes(firstStationName),
   );
   truthy(
     "the station dashboard says which stop on the route it is",
@@ -1263,7 +1279,8 @@ async function testPages(jars) {
   const phoneCountHtml = (await phoneCount.text()).replace(/<!--\s*-->/g, "");
   truthy(
     "the counting screen says which station the count is for",
-    phoneCountHtml.includes("Counting at Station 1"),
+    firstStationName.length > 0 &&
+      phoneCountHtml.includes(`Counting at ${firstStationName}`),
   );
 
   const phoneHub = await call(`${PHONE}/more`, { jar: jars.staff.jar });
@@ -1492,6 +1509,45 @@ async function cleanupSmokeRows() {
     method: "DELETE",
   });
   truthy("the leftover test receiver is forgotten", forgotten.status === 200);
+
+  /*
+   * The test board.
+   *
+   * A board that talks to the PC leaves a row behind, and there is no console
+   * button for removing a board, so the row is cleared here instead. Only the
+   * board the test names is touched.
+   */
+  await cleanupTestBoards();
+}
+
+/**
+ * Clears the rows the receiver's network test leaves behind.
+ *
+ * The board rows are cleared straight in the database, because there is no
+ * console button for removing a board and the test must not leave one behind.
+ */
+async function cleanupTestBoards() {
+  const url = process.env.DATABASE_URL ?? adminEnv.DATABASE_URL ?? "";
+  if (!url) {
+    truthy("the leftover test board is removed", false, "no database address");
+    return;
+  }
+
+  let client;
+  try {
+    const { Client } = await import("pg");
+    client = new Client({ connectionString: url });
+    await client.connect();
+    await client.query(
+      `DELETE FROM "ReceiverNetworkCommand" WHERE "stationId" LIKE 'SMOKE-%'`,
+    );
+    await client.query(`DELETE FROM "PortStation" WHERE "stationId" LIKE 'SMOKE-%'`);
+    truthy("the leftover test board is removed", true);
+  } catch (error) {
+    truthy("the leftover test board is removed", false, error.message);
+  } finally {
+    if (client) await client.end().catch(() => {});
+  }
 }
 
 /**
@@ -1699,6 +1755,368 @@ async function testGpsBench(jars) {
   );
 }
 
+/**
+ * The receiver's network.
+ *
+ * The board at the head station asks the PC every few seconds whether it has
+ * been given a different network to use. The master administrator types the
+ * new network into the console instead of opening the Arduino IDE.
+ *
+ * The rules this checks:
+ *   - only the head administrator can ask for a network
+ *   - the board is given the network exactly once
+ *   - the password is never sent back to a browser
+ *   - the board's own report of the network it is on is shown on the console
+ *   - the station phone process never serves the device route
+ */
+async function testReceiverNetwork() {
+  console.log("\nThe receiver's network, the console to the board");
+
+  const STATION = "SMOKE-PS";
+  const SSID = "Smoke-Test-Network";
+  const PASSWORD = "smoke-test-password";
+
+  const admin = await signIn(ADMIN, ACCOUNTS.admin);
+  const staff = await signIn(ADMIN, ACCOUNTS.staff);
+
+  const noKey = await call(`${ADMIN}/api/device/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stationId: STATION }),
+  });
+  check("no device key is refused on the link route", noKey.status, 401);
+
+  const wrongKey = await call(`${ADMIN}/api/device/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-device-key": "not-the-key" },
+    body: JSON.stringify({ stationId: STATION }),
+  });
+  check("a wrong device key is refused on the link route", wrongKey.status, 401);
+
+  const badBody = await call(`${ADMIN}/api/device/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+    body: JSON.stringify({ stationId: "not a name" }),
+  });
+  check("a bad board name is refused on the link route", badBody.status, 400);
+
+  const staffAsk = await call(`${ADMIN}/api/admin/receivers`, {
+    jar: staff.jar,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stationId: STATION, ssid: SSID, password: PASSWORD }),
+  });
+  check("the station staff cannot ask for a network", staffAsk.status, 403);
+
+  const asked = await call(`${ADMIN}/api/admin/receivers`, {
+    jar: admin.jar,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stationId: STATION, ssid: SSID, password: PASSWORD }),
+  });
+  check("the head administrator can ask for a network", asked.status, 200);
+  truthy(
+    "the answer does not carry the password back",
+    JSON.stringify(await body(asked)).includes(PASSWORD) === false,
+  );
+
+  const listed = await body(
+    await call(`${ADMIN}/api/admin/receivers`, { jar: admin.jar }),
+  );
+  const pending = listed.receivers?.find((r) => r.stationId === STATION);
+  truthy("the request is waiting for the board", pending?.command?.status === "pending");
+  truthy(
+    "the console does not hold the password",
+    JSON.stringify(listed).includes(PASSWORD) === false,
+  );
+
+  const taken = await call(`${ADMIN}/api/device/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+    body: JSON.stringify({
+      stationId: STATION,
+      wifi: { ssid: "Old-Network", status: "connected", ip: "10.0.0.2" },
+    }),
+  });
+  check("the board is heard from", taken.status, 200);
+  const takenBody = await body(taken);
+  truthy("the board is given the network", takenBody.command?.ssid === SSID);
+  truthy("the board is given the password", takenBody.command?.password === PASSWORD);
+
+  const again = await body(
+    await call(`${ADMIN}/api/device/link`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+      body: JSON.stringify({ stationId: STATION }),
+    }),
+  );
+  truthy("the network is given out only once", again.command === null);
+
+  // The board tries the new network and it works, so it says so.
+  const reported = await call(`${ADMIN}/api/device/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+    body: JSON.stringify({
+      stationId: STATION,
+      wifi: { ssid: SSID, status: "connected", ip: "10.0.0.9" },
+    }),
+  });
+  check("the board can report the network it is on", reported.status, 200);
+
+  const after = await body(
+    await call(`${ADMIN}/api/admin/receivers`, { jar: admin.jar }),
+  );
+  const row = after.receivers?.find((r) => r.stationId === STATION);
+  truthy("the console shows the network the board is on", row?.wifiSsid === SSID);
+  truthy("the console shows the board is connected", row?.wifiStatus === "connected");
+  truthy("the console shows the request was answered", row?.command?.status === "connected");
+  truthy("the console knows when the board was last heard from", Boolean(row?.lastSeenAt));
+
+  // A request that has not been taken can be taken back.
+  await call(`${ADMIN}/api/admin/receivers`, {
+    jar: admin.jar,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stationId: STATION, ssid: SSID, password: PASSWORD }),
+  });
+  const cancelled = await call(`${ADMIN}/api/admin/receivers?stationId=${STATION}`, {
+    jar: admin.jar,
+    method: "DELETE",
+  });
+  check("a waiting request can be taken back", cancelled.status, 200);
+  const afterCancel = await body(
+    await call(`${ADMIN}/api/device/link`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+      body: JSON.stringify({ stationId: STATION }),
+    }),
+  );
+  truthy("a request that was taken back is not given out", afterCancel.command === null);
+
+  const onPhone = await call(`${PHONE}/api/device/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+    body: JSON.stringify({ stationId: STATION }),
+  });
+  check("the station phone process never serves the link route", onPhone.status, 404);
+}
+
+/**
+ * The PC's own network.
+ *
+ * The board at the head station has to be on the same network as the PC, so the
+ * console reads the Wi-Fi the PC is on and offers it to the board. The password
+ * of that network is taken from the profile Windows has saved, and it never
+ * reaches a browser.
+ *
+ * The rules this checks:
+ *   - only the head administrator can ask what network the PC is on
+ *   - the answer never carries a password, only whether one is saved
+ *   - the network the PC is on is a real network with a real address
+ *   - a network can be asked for without typing the password at all
+ *   - the station phone process never serves the route
+ */
+async function testPcNetwork() {
+  console.log("\nThe PC's own network, the console to the board");
+
+  const STATION = "SMOKE-PS";
+
+  const admin = await signIn(ADMIN, ACCOUNTS.admin);
+  const staff = await signIn(ADMIN, ACCOUNTS.staff);
+
+  const anonymous = await call(`${ADMIN}/api/admin/network`);
+  check("a person who is not signed in is refused", anonymous.status, 401);
+
+  const staffAsk = await call(`${ADMIN}/api/admin/network`, { jar: staff.jar });
+  check("the station staff cannot ask what network the PC is on", staffAsk.status, 403);
+
+  const asked = await call(`${ADMIN}/api/admin/network`, { jar: admin.jar });
+  check("the head administrator can ask what network the PC is on", asked.status, 200);
+
+  const answer = await body(asked);
+  const network = answer.network;
+
+  truthy("the answer carries a network", Boolean(network));
+  truthy("the answer says which network the PC is on", Boolean(network?.ssid));
+  truthy("the answer says what address the PC has", Boolean(network?.ip));
+  truthy("the answer says which adapter the PC is on", Boolean(network?.adapter));
+  check(
+    "the answer says whether the password is saved",
+    typeof network?.passwordSaved,
+    "boolean",
+  );
+
+  truthy(
+    "the answer never carries a password",
+    JSON.stringify(answer).includes('"password":') === false,
+  );
+  truthy(
+    "the answer never carries the saved key material",
+    JSON.stringify(answer).includes("keyMaterial") === false,
+  );
+  truthy(
+    "the address the PC has is a real address",
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(String(network?.ip ?? "")),
+  );
+
+  // The password can be left out, because the PC already knows it.
+  const withEmptyPassword = await call(`${ADMIN}/api/admin/receivers`, {
+    jar: admin.jar,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stationId: STATION, ssid: network.ssid, password: "" }),
+  });
+  check("a network can be asked for without typing the password", withEmptyPassword.status, 200);
+
+  const handed = await body(
+    await call(`${ADMIN}/api/device/link`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+      body: JSON.stringify({ stationId: STATION }),
+    }),
+  );
+  truthy("the board is given the network the PC is on", handed.command?.ssid === network.ssid);
+  check(
+    "the board is given a password, even an empty one",
+    typeof handed.command?.password,
+    "string",
+  );
+
+  // The console does not keep the password it just handed over.
+  const listed = await body(
+    await call(`${ADMIN}/api/admin/receivers`, { jar: admin.jar }),
+  );
+  truthy(
+    "the console still does not hold the password",
+    JSON.stringify(listed).includes('"password":') === false,
+  );
+
+  // The station accounts never see the head station's network, on either process.
+  const staffOnPhone = await call(`${PHONE}/api/admin/network`, { jar: staff.jar });
+  check(
+    "the station staff cannot ask what network the PC is on, from the counter",
+    staffOnPhone.status,
+    403,
+  );
+
+  const staffBoards = await call(`${PHONE}/api/admin/receivers`, { jar: staff.jar });
+  check(
+    "the station staff cannot see the boards, from the counter",
+    staffBoards.status,
+    403,
+  );
+
+  const onPhone = await call(`${PHONE}/api/admin/network`);
+  check(
+    "a person who is not signed in is refused on the counter process",
+    onPhone.status,
+    401,
+  );
+}
+
+/**
+ * Every network in range.
+ *
+ * The board can be put on any network the PC can see, not only on the one the
+ * PC is on. The console lists them all, so that a different network can be
+ * chosen without typing the name.
+ *
+ * The rules this checks:
+ *   - only the head administrator can look for the networks
+ *   - the list never carries a password
+ *   - every network says whether its password is saved on this PC
+ *   - the network the PC is on is in the list, and is marked
+ *   - a network that is not saved gives the board no password, so the console
+ *     has to tell the person that the password has to be typed
+ */
+async function testNearbyNetworks() {
+  console.log("\nEvery network in range, the console to the board");
+
+  const STATION = "SMOKE-PS";
+
+  const admin = await signIn(ADMIN, ACCOUNTS.admin);
+  const staff = await signIn(ADMIN, ACCOUNTS.staff);
+
+  const anonymous = await call(`${ADMIN}/api/admin/network/scan`);
+  check("a person who is not signed in is refused", anonymous.status, 401);
+
+  const staffAsk = await call(`${ADMIN}/api/admin/network/scan`, { jar: staff.jar });
+  check("the station staff cannot look for the networks", staffAsk.status, 403);
+
+  const staffOnPhone = await call(`${PHONE}/api/admin/network/scan`, { jar: staff.jar });
+  check(
+    "the station staff cannot look for the networks, from the counter",
+    staffOnPhone.status,
+    403,
+  );
+
+  const asked = await call(`${ADMIN}/api/admin/network/scan`, { jar: admin.jar });
+  check("the head administrator can look for the networks", asked.status, 200);
+
+  const answer = await body(asked);
+  const available = answer.available;
+
+  truthy("the answer carries a list of networks", Array.isArray(available));
+  truthy(
+    "every network in the list has a name",
+    Array.isArray(available) &&
+      available.every((n) => typeof n.ssid === "string" && n.ssid.length > 0),
+  );
+  truthy(
+    "the answer never carries a password",
+    JSON.stringify(answer).includes('"password":') === false,
+  );
+  truthy(
+    "the answer never carries the saved key material",
+    JSON.stringify(answer).includes("keyMaterial") === false,
+  );
+  truthy(
+    "every network says whether the password is saved on this PC",
+    Array.isArray(available) && available.every((n) => typeof n.passwordSaved === "boolean"),
+  );
+
+  const current = await body(await call(`${ADMIN}/api/admin/network`, { jar: admin.jar }));
+  const currentSsid = current?.network?.ssid ?? null;
+
+  if (!currentSsid) {
+    console.log("  --    this PC is not on a Wi-Fi network, so the rest is skipped");
+    return;
+  }
+
+  const mine = available?.find((n) => n.ssid === currentSsid);
+  truthy("the network this PC is on is in the list", Boolean(mine));
+  truthy("it is marked as the one this PC is on", mine?.connected === true);
+
+  // A network that is not saved gives the board no password at all.
+  const notSaved = available?.find((n) => n.passwordSaved === false);
+  if (!notSaved) {
+    console.log("  --    every network in range has its password saved, so that is skipped");
+  } else {
+    await call(`${ADMIN}/api/admin/receivers`, {
+      jar: admin.jar,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stationId: STATION, ssid: notSaved.ssid, password: "" }),
+    });
+    const handed = await body(
+      await call(`${ADMIN}/api/device/link`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-device-key": DEVICE_KEY },
+        body: JSON.stringify({ stationId: STATION }),
+      }),
+    );
+    truthy("the board is given that network", handed.command?.ssid === notSaved.ssid);
+    truthy(
+      "the board is given no password, because this PC does not have one",
+      handed.command?.password === "",
+    );
+    await call(`${ADMIN}/api/admin/receivers?stationId=${STATION}`, {
+      jar: admin.jar,
+      method: "DELETE",
+    });
+  }
+}
+
 async function main() {
   console.log("Freery end to end test");
   console.log(`  admin process ${ADMIN}`);
@@ -1713,6 +2131,9 @@ async function main() {
     await testCounting(jars);
     await testPages(jars);
     await testGpsBench(jars);
+    await testReceiverNetwork();
+    await testPcNetwork();
+    await testNearbyNetworks();
     await testPublicSite();
   } catch (error) {
     failed += 1;

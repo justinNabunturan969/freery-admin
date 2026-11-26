@@ -40,6 +40,15 @@ export const ADMIN_ONLY_PREFIXES = ["/api/ingest"];
 export const COUNTER_ONLY_PREFIXES = ["/api/counter", "/counter", "/more"];
 
 /**
+ * The routes a device calls for itself.
+ *
+ * A board at the head station talks to this PC with the device key in a
+ * header, and it has no session to send because it is not a person. These
+ * routes carry their own key instead, and the route itself checks it.
+ */
+export const DEVICE_PREFIXES = ["/api/ingest", "/api/device"];
+
+/**
  * True when the path belongs to the admin side of the system.
  */
 export function isAdminPath(pathname: string): boolean {

@@ -258,7 +258,7 @@ export function AccountsManager({
                 id="account-name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Station 1 administrator"
+                placeholder="Guadalupe Ferry Station administrator"
               />
             </Field>
             <Field label="Role" htmlFor="account-role">

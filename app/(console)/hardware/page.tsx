@@ -1,7 +1,9 @@
-import { getFerries, getGpsLogs, successRate } from "@/lib/queries";
+import { getFerries, getGpsLogs, getPortStations, successRate } from "@/lib/queries";
 import { Card, CardHeader, Footnote } from "@/components/ui/primitives";
 import { Meter, StatCard, StatusPill, formatDateTime, timeAgo } from "@/components/ui/stats";
 import { PageHeader } from "@/components/admin/PageHeader";
+import { ReceiverNetworkPanel } from "@/components/admin/ReceiverNetworkPanel";
+import { MODE } from "@/lib/mode";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +17,33 @@ export const dynamic = "force-dynamic";
  * The master administrator and the station administrator read the same page.
  */
 export default async function HardwarePage() {
-  const [ferries, gpsLogs] = await Promise.all([getFerries(), getGpsLogs(50)]);
+  const [ferries, gpsLogs, receivers] = await Promise.all([
+    getFerries(),
+    getGpsLogs(50),
+    getPortStations(),
+  ]);
+
+  /*
+   * The receiver that forwards the packets to this PC.
+   *
+   * It says so itself, every few seconds, so "online" is a fact and not a
+   * hope. A board that has never been heard from is shown as such.
+   */
+  const receiver = receivers[0] ?? null;
+  const seenMinutes = receiver?.lastSeenAt
+    ? (Date.now() - new Date(receiver.lastSeenAt).getTime()) / 60000
+    : null;
+  const receiverOnline = seenMinutes !== null && seenMinutes < 2;
+  const receiverLabel = receiver
+    ? receiverOnline
+      ? "Online"
+      : timeAgo(receiver.lastSeenAt)
+    : "Not heard from";
+  const receiverHint = receiver
+    ? receiver.wifiStatus === "connected" && receiver.wifiSsid
+      ? `On ${receiver.wifiSsid}. It posts packets to this PC.`
+      : "It posts packets to this PC."
+    : "The port station has not talked to this PC yet.";
 
   const lastPacket = ferries
     .map((ferry) => ferry.receivedAt)
@@ -44,9 +72,9 @@ export default async function HardwarePage() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Receiver"
-          value="Online"
-          tone="brand"
-          hint="The port station posts packets to this PC."
+          value={receiverLabel}
+          tone={receiverOnline ? "brand" : "warn"}
+          hint={receiverHint}
         />
         <StatCard
           label="Packet success rate"
@@ -64,6 +92,17 @@ export default async function HardwarePage() {
           hint={strongest ? `On ${strongest.name}` : "No RSSI has been reported yet"}
         />
       </div>
+
+      {/*
+       * The receiver's network is the head administrator's job. The station
+       * administrator sees the state of the board in the card above, and
+       * nothing that could change it.
+       */}
+      {MODE === "admin" ? (
+        <div className="mt-5">
+          <ReceiverNetworkPanel receivers={receivers} />
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         {ferries.map((ferry) => {

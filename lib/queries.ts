@@ -325,6 +325,262 @@ export async function getGpsLogs(limit = 200): Promise<GpsLogRow[]> {
   );
 }
 
+/* --- The receiver's network ------------------------------------------------ */
+
+/** Where a request is in its life. */
+export type ReceiverNetworkStatus =
+  | "pending"
+  | "delivered"
+  | "connected"
+  | "failed"
+  | "cancelled";
+
+/** What a board says about the network it is on. */
+export type ReceiverWifiStatus = "connected" | "failed" | "setup";
+
+export interface ReceiverNetworkCommandRow {
+  id: number;
+  ssid: string;
+  status: ReceiverNetworkStatus;
+  message: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+  answeredAt: string | null;
+}
+
+export interface PortStationRow {
+  stationId: string;
+  wifiSsid: string | null;
+  wifiStatus: ReceiverWifiStatus | null;
+  wifiIp: string | null;
+  lastSeenAt: string | null;
+  command: ReceiverNetworkCommandRow | null;
+}
+
+/**
+ * Every board that talks to this PC, and the network each one is on.
+ *
+ * A board that has never reported is not in the list, unless a network has been
+ * asked of it, because then the administrator has to see that the request is
+ * still waiting.
+ */
+export async function getPortStations(): Promise<PortStationRow[]> {
+  const rows = await query<{
+    stationId: string;
+    wifiSsid: string | null;
+    wifiStatus: string | null;
+    wifiIp: string | null;
+    lastSeenAt: string | null;
+    commandId: number | null;
+    commandSsid: string | null;
+    commandStatus: string | null;
+    commandMessage: string | null;
+    commandCreatedAt: string | null;
+    commandDeliveredAt: string | null;
+    commandAnsweredAt: string | null;
+  }>(
+    `WITH ids AS (
+       SELECT "stationId" FROM "PortStation"
+       UNION
+       SELECT "stationId" FROM "ReceiverNetworkCommand"
+     )
+     SELECT i."stationId",
+            p."wifiSsid", p."wifiStatus", p."wifiIp", p."lastSeenAt",
+            c.id AS "commandId", c.ssid AS "commandSsid", c.status AS "commandStatus",
+            c.message AS "commandMessage", c."createdAt" AS "commandCreatedAt",
+            c."deliveredAt" AS "commandDeliveredAt", c."answeredAt" AS "commandAnsweredAt"
+     FROM ids i
+     LEFT JOIN "PortStation" p ON p."stationId" = i."stationId"
+     LEFT JOIN LATERAL (
+       SELECT * FROM "ReceiverNetworkCommand" c2
+       WHERE c2."stationId" = i."stationId"
+       ORDER BY c2."createdAt" DESC
+       LIMIT 1
+     ) c ON TRUE
+     ORDER BY p."lastSeenAt" DESC NULLS LAST, i."stationId"`,
+  );
+
+  return rows.map((row) => ({
+    stationId: row.stationId,
+    wifiSsid: row.wifiSsid,
+    wifiStatus: (row.wifiStatus ?? null) as ReceiverWifiStatus | null,
+    wifiIp: row.wifiIp,
+    lastSeenAt: row.lastSeenAt,
+    command:
+      row.commandId === null
+        ? null
+        : {
+            id: row.commandId,
+            ssid: row.commandSsid ?? "",
+            status: (row.commandStatus ?? "pending") as ReceiverNetworkStatus,
+            message: row.commandMessage,
+            createdAt: row.commandCreatedAt ?? "",
+            deliveredAt: row.commandDeliveredAt,
+            answeredAt: row.commandAnsweredAt,
+          },
+  }));
+}
+
+/**
+ * Asks a board to use a different network.
+ *
+ * Only one request is open at a time. A second request replaces the first one,
+ * because the administrator has changed their mind and the old request would
+ * only confuse the board.
+ */
+export async function requestReceiverNetwork(input: {
+  stationId: string;
+  ssid: string;
+  password: string;
+}): Promise<ReceiverNetworkCommandRow> {
+  await query(
+    `UPDATE "ReceiverNetworkCommand"
+     SET status = 'cancelled', message = 'a newer request was made', "answeredAt" = now()
+     WHERE "stationId" = $1 AND status IN ('pending', 'delivered')`,
+    [input.stationId],
+  );
+
+  const rows = await query<{
+    id: number;
+    ssid: string;
+    status: string;
+    message: string | null;
+    createdAt: string;
+    deliveredAt: string | null;
+    answeredAt: string | null;
+  }>(
+    `INSERT INTO "ReceiverNetworkCommand" ("stationId", ssid, password)
+     VALUES ($1, $2, $3)
+     RETURNING id, ssid, status, message, "createdAt", "deliveredAt", "answeredAt"`,
+    [input.stationId, input.ssid, input.password],
+  );
+
+  const row = rows[0];
+  if (!row) {
+    throw new Error("The network request was not written");
+  }
+  return {
+    id: row.id,
+    ssid: row.ssid,
+    status: row.status as ReceiverNetworkStatus,
+    message: row.message,
+    createdAt: row.createdAt,
+    deliveredAt: row.deliveredAt,
+    answeredAt: row.answeredAt,
+  };
+}
+
+/**
+ * Takes the network a board is being asked to use.
+ *
+ * The row is marked as delivered in the same statement that reads it, so two
+ * boards asking at the same time cannot both be given the same request. The
+ * password is returned once and then cleared.
+ */
+export async function takeReceiverNetwork(
+  stationId: string,
+): Promise<{ id: number; ssid: string; password: string } | null> {
+  const rows = await query<{ id: number; ssid: string; password: string }>(
+    `UPDATE "ReceiverNetworkCommand"
+     SET status = 'delivered', "deliveredAt" = now()
+     WHERE id = (
+       SELECT id FROM "ReceiverNetworkCommand"
+       WHERE "stationId" = $1 AND status = 'pending'
+       ORDER BY "createdAt" ASC
+       LIMIT 1
+     )
+     RETURNING id, ssid, password`,
+    [stationId],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  /* The secret has been handed over. It does not stay in the database. */
+  await query(
+    `UPDATE "ReceiverNetworkCommand" SET password = '' WHERE id = $1`,
+    [row.id],
+  );
+
+  return { id: row.id, ssid: row.ssid, password: row.password };
+}
+
+/**
+ * Writes down what a board says about its own network.
+ *
+ * When a board has been given a new network and it is now on that network,
+ * the request is marked as answered. When the board tried it and could not get
+ * on, the request is marked as failed and the board keeps the network it
+ * already had.
+ */
+export async function recordPortStation(input: {
+  stationId: string;
+  ssid: string | null;
+  status: string | null;
+  ip: string | null;
+}): Promise<void> {
+  await query(
+    `INSERT INTO "PortStation" ("stationId", "wifiSsid", "wifiStatus", "wifiIp", "lastSeenAt")
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT ("stationId") DO UPDATE
+       SET "wifiSsid" = COALESCE(EXCLUDED."wifiSsid", "PortStation"."wifiSsid"),
+           "wifiStatus" = COALESCE(EXCLUDED."wifiStatus", "PortStation"."wifiStatus"),
+           "wifiIp" = COALESCE(EXCLUDED."wifiIp", "PortStation"."wifiIp"),
+           "lastSeenAt" = now(),
+           "updatedAt" = now()`,
+    [input.stationId, input.ssid, input.status, input.ip],
+  );
+
+  /*
+   * Only a request the board has already taken is answered here. A request that
+   * is still waiting was not taken yet, and the board saying which network it
+   * is on says nothing about a network it has not been given.
+   */
+  if (input.status === "failed") {
+    await query(
+      `UPDATE "ReceiverNetworkCommand"
+       SET status = 'failed', message = $2, "answeredAt" = now()
+       WHERE "stationId" = $1 AND status = 'delivered'`,
+      [input.stationId, "The board could not get on that network"],
+    );
+    return;
+  }
+
+  if (input.status === "connected" && input.ssid) {
+    /* The board is on the network it was asked to use. */
+    await query(
+      `UPDATE "ReceiverNetworkCommand"
+       SET status = 'connected', message = $2, "answeredAt" = now()
+       WHERE "stationId" = $1 AND status = 'delivered' AND ssid = $3`,
+      [input.stationId, "The board is on that network", input.ssid],
+    );
+    /* Any other request the board took earlier was not the one it is on now. */
+    await query(
+      `UPDATE "ReceiverNetworkCommand"
+       SET status = 'failed', message = $2, "answeredAt" = now()
+       WHERE "stationId" = $1 AND status = 'delivered' AND ssid <> $3`,
+      [input.stationId, "The board stayed on the network it already had", input.ssid],
+    );
+  }
+}
+
+/**
+ * Takes back a request that has not been answered.
+ *
+ * The board may already have taken it, so the request is only cancelled while
+ * it is still waiting to be picked up.
+ */
+export async function cancelReceiverNetwork(stationId: string): Promise<boolean> {
+  const rows = await query<{ id: number }>(
+    `UPDATE "ReceiverNetworkCommand"
+     SET status = 'cancelled', message = 'cancelled by the administrator', "answeredAt" = now()
+     WHERE "stationId" = $1 AND status = 'pending'
+     RETURNING id`,
+    [stationId],
+  );
+  return rows.length > 0;
+}
+
 /* --- The receiver bench --------------------------------------------------- */
 
 /**
