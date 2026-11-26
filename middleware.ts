@@ -114,6 +114,15 @@ export default auth((request: NextAuthRequest) => {
     !pathname.startsWith("/api/") &&
     role !== "ADMIN"
   ) {
+    /*
+     * The sign in page is where they land, and it must not send them back
+     * again. A redirect from the sign in page to the sign in page is a loop:
+     * the browser follows it until it gives up with "too many redirects", and
+     * the console looks broken with no way out. The sign in page says why the
+     * account is not welcome here, and offers the way forward.
+     */
+    if (pathname === "/login") return NextResponse.next();
+
     return NextResponse.redirect(new URL("/login", request.nextUrl));
   }
 
