@@ -76,6 +76,64 @@ export function errorBandColor(errorM: number | null): string {
   return "#C2453B";
 }
 
+/**
+ * Running a Leaflet call without letting it take the page down.
+ *
+ * Leaflet throws when it is asked for something it cannot do, and a throw
+ * inside a React effect tears the whole console down with it. The map is only
+ * a picture, so a picture that cannot be drawn is not worth the page. The
+ * error is written to the browser's console so it can still be looked at.
+ */
+function safely(action: () => void): void {
+  try {
+    action();
+  } catch (error) {
+    console.error("The map could not be drawn.", error);
+  }
+}
+
+/**
+ * The place the map opens on.
+ *
+ * Leaflet needs a centre and a zoom before anything is put on the map. A map
+ * with neither is not a map yet: the zoom is what the tiles are worked out
+ * from, and without it Leaflet comes to the conclusion that it has to load an
+ * infinite number of tiles, which throws, and the throw takes the page down
+ * with it.
+ *
+ * So the map is opened on a real place: the receiver if it has reported, else
+ * the last position it recorded, else the marked true position. When there is
+ * nothing at all to show, the map opens on the world, which says honestly that
+ * there is nothing yet.
+ */
+function startingView({
+  receiver,
+  fixes,
+  reference,
+}: {
+  receiver: MapReceiver | null;
+  fixes: MapFix[];
+  reference: MapReference | null;
+}): { latlng: [number, number]; zoom: number } | null {
+  const isPlace = (lat: number, lon: number): boolean =>
+    Number.isFinite(lat) && Number.isFinite(lon);
+
+  if (receiver && isPlace(receiver.lat, receiver.lon)) {
+    return { latlng: [receiver.lat, receiver.lon], zoom: 17 };
+  }
+
+  const last = fixes.at(-1);
+  if (last && isPlace(last.lat, last.lon)) {
+    return { latlng: [last.lat, last.lon], zoom: 17 };
+  }
+
+  if (reference && isPlace(reference.lat, reference.lon)) {
+    return { latlng: [reference.lat, reference.lon], zoom: 19 };
+  }
+
+  return null;
+}
+
 export function ReceiverMap({
   fixes,
   receiver,
@@ -125,6 +183,22 @@ export function ReceiverMap({
   const [tilesFailed, setTilesFailed] = useState(false);
   const [ready, setReady] = useState(false);
   const fitted = useRef(false);
+  /*
+   * Whether the map has been put on a real place yet.
+   *
+   * The first position is a jump, because a pan from the world view would
+   * take the reader across the ocean. After that the map follows.
+   */
+  const placed = useRef(false);
+  /*
+   * The newest data.
+   *
+   * The map is made once, and it needs a place to open on. The data may not
+   * have arrived by the time it is made, so the newest values are kept here
+   * and read at the moment the map is made.
+   */
+  const latest = useRef({ receiver, fixes, reference });
+  latest.current = { receiver, fixes, reference };
 
   /* The map is made once. Leaflet cannot live outside the browser. */
   useEffect(() => {
@@ -151,6 +225,25 @@ export function ReceiverMap({
         maxZoom: 21,
       });
       map.current = instance;
+
+      /*
+       * The map is given a place and a zoom straight away.
+       *
+       * A map with no zoom is not a map yet. The tiles are worked out from it,
+       * so without it Leaflet tries to load an infinite number of tiles and
+       * throws, and the throw takes the whole page down. The place is the
+       * receiver when it has reported, so the map opens on the bench and not
+       * on the world.
+       */
+      const view = startingView(latest.current);
+      if (view) {
+        safely(() => instance.setView(view.latlng, view.zoom));
+        placed.current = true;
+      } else {
+        /* Nothing has been reported yet, so the map opens on the world. */
+        safely(() => instance.setView([0, 0], 2));
+      }
+
       baseLayers.current = L.layerGroup().addTo(instance);
       trackLayers.current = L.layerGroup().addTo(instance);
       receiverLayer.current = L.layerGroup().addTo(instance);
@@ -178,7 +271,9 @@ export function ReceiverMap({
        * The map lives in a card that reflows with the page, so the size of the
        * map has to be told to Leaflet again whenever the card changes width.
        */
-      const observer = new ResizeObserver(() => instance.invalidateSize());
+      const observer = new ResizeObserver(() =>
+        safely(() => instance.invalidateSize()),
+      );
       observer.observe(container.current);
       observerRef.current = observer;
     }
@@ -344,10 +439,13 @@ export function ReceiverMap({
       if (reference) places.push([reference.lat, reference.lon]);
 
       if (places.length > 0) {
-        instance.fitBounds(L.latLngBounds(places).pad(0.2), {
-          maxZoom: 19,
-        });
+        safely(() =>
+          instance.fitBounds(L.latLngBounds(places).pad(0.2), {
+            maxZoom: 19,
+          }),
+        );
         fitted.current = true;
+        placed.current = true;
       }
     }
   }, [fixes, reference, ready]);
@@ -392,7 +490,21 @@ export function ReceiverMap({
     }
 
     if (follow) {
-      instance.panTo([receiver.lat, receiver.lon], { animate: true, duration: 0.6 });
+      /*
+       * The first time, the map is put on the receiver in one step. After that
+       * it follows it as the positions arrive.
+       */
+      if (!placed.current) {
+        safely(() => instance.setView([receiver.lat, receiver.lon], 17));
+        placed.current = true;
+      } else {
+        safely(() =>
+          instance.panTo([receiver.lat, receiver.lon], {
+            animate: true,
+            duration: 0.6,
+          }),
+        );
+      }
     }
   }, [receiver, follow, ready]);
 
@@ -446,7 +558,7 @@ export function ReceiverMap({
     /* The reader asked to look at this place, so the map stops following the
        receiver, the way dragging it does. */
     onFollowChange?.(false);
-    instance.flyTo(place, 21, { duration: 0.8 });
+    safely(() => instance.flyTo(place, 21, { duration: 0.8 }));
   }, [focusRequest, ready]);
 
   return (

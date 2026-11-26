@@ -312,14 +312,22 @@ export function GpsTest({
     [receivers, receiver],
   );
 
-  const onShow = receiver
-    ? {
-        deviceId: receiver.deviceId,
-        lat: receiver.lat ?? 0,
-        lon: receiver.lon ?? 0,
-        current: true,
-      }
-    : null;
+  /*
+   * The receiver on the map.
+   *
+   * A receiver that has not reported has no place yet, so it is left off the
+   * map: the map would open in the middle of the ocean, on a position the
+   * receiver has never given.
+   */
+  const onShow =
+    receiver && receiver.lat !== null && receiver.lon !== null
+      ? {
+          deviceId: receiver.deviceId,
+          lat: receiver.lat,
+          lon: receiver.lon,
+          current: true,
+        }
+      : null;
 
   const reference = analysis?.reference ?? null;
   const stats = analysis?.stats ?? null;
