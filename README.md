@@ -20,7 +20,7 @@ of the server that runs this app, never in the repository.
 
 | Name | What it is |
 |---|---|
-| `DATABASE_URL` | The PostgreSQL connection string |
+| `DATABASE_URL` | The PostgreSQL connection string. The database is Neon, so this is a pooled address in the cloud |
 | `DATABASE_SSL` | `true` when the database needs TLS |
 | `DATABASE_POOL_MAX` | How many connections to keep open |
 | `AUTH_SECRET` | The key that signs the login cookie |
@@ -39,6 +39,15 @@ The build command on the hosting platform is `next build`, not
 `npm run build`. The `npm run build` script wants a local environment
 file, and the platform provides the values through the environment
 instead.
+
+## The database
+
+It is **Neon**, a PostgreSQL in the cloud. There is no database server on
+the computer to install and none to start.
+
+The connection string is the pooled address of the `freery_station` role,
+because this app opens connections many times. The schema changes are run
+with the direct address, because a pooled address cannot carry them.
 
 ## How to run it on a computer
 
